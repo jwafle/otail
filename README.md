@@ -11,5 +11,8 @@ The tool connects to the OpenTelemetry Collector's remotetapprocessor and stream
 ## Running Otail
 
 ```bash
-go run cmd/main.go
+go run cmd/main.go --endpoint ws://127.0.0.1:12001
 ```
+
+The endpoint defaults to `ws://127.0.0.1:12001`. You can also use `-e` as a
+shorthand flag.
