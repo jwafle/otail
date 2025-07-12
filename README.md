@@ -10,6 +10,16 @@ The tool connects to the OpenTelemetry Collector's remotetapprocessor and stream
 
 ## Running Otail
 
+Compile or run the application and specify which stream you want to view:
+
 ```bash
+# defaults to logs
 go run cmd/main.go
+
+# explicitly select a stream
+go run cmd/main.go logs
+go run cmd/main.go metrics
+go run cmd/main.go traces
 ```
+
+Once running press **l**, **m**, or **t** to switch between logs, metrics, and traces.
