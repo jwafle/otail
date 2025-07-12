@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
+	"net/url"
 	"strings"
 
 	"golang.org/x/net/websocket"
@@ -95,11 +97,19 @@ func (m model) View() string {
 }
 
 func main() {
-	url := "ws://127.0.0.1:12001"
+	endpoint := "ws://127.0.0.1:12001"
+	flag.StringVar(&endpoint, "endpoint", endpoint, "websocket endpoint")
+	flag.StringVar(&endpoint, "e", endpoint, "websocket endpoint")
+	flag.Parse()
+
+	if u, err := url.Parse(endpoint); err != nil || u.Scheme == "" || u.Host == "" {
+		log.Fatalf("invalid endpoint %q: %v", endpoint, err)
+	}
+
 	origin := "http://localhost/"
-	conn, err := websocket.Dial(url, "", origin)
+	conn, err := websocket.Dial(endpoint, "", origin)
 	if err != nil {
-		log.Fatalf("failed to connect to %s: %v", url, err)
+		log.Fatalf("failed to connect to %s: %v", endpoint, err)
 	}
 	if _, err := tea.NewProgram(newModel(conn)).Run(); err != nil {
 		fmt.Println("Error running program:", err)
