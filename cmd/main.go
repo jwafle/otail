@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	plog "go.opentelemetry.io/collector/pdata/plog"
 	pmetric "go.opentelemetry.io/collector/pdata/pmetric"
@@ -49,6 +50,11 @@ func (s streamKind) String() string {
 		return "logs"
 	}
 }
+
+var statusStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
+	Light: "#909090",
+	Dark:  "#626262",
+})
 
 type keyMap struct {
 	Logs    key.Binding
@@ -203,14 +209,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) View() string {
 	var b strings.Builder
-	if m.paused {
-		b.WriteString("[PAUSED] ")
-	} else {
-		b.WriteString(m.spinner.View())
-		b.WriteString(" Streaming ")
-	}
-	b.WriteString(m.active.String())
-	b.WriteString("\n\n")
 
 	var msgs []string
 	switch m.active {
@@ -231,6 +229,16 @@ func (m model) View() string {
 		b.WriteString(m.err.Error())
 		b.WriteString("\n")
 	}
+	b.WriteString("\n")
+	var statusLine strings.Builder
+	if m.paused {
+		statusLine.WriteString("[PAUSED] ")
+	} else {
+		statusLine.WriteString(m.spinner.View())
+		statusLine.WriteString(" Streaming ")
+	}
+	statusLine.WriteString(m.active.String())
+	b.WriteString(statusStyle.Render(statusLine.String()))
 	b.WriteString("\n")
 	b.WriteString(m.help.View(m))
 	return b.String()
