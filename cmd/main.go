@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"log"
 
-	"os"
 	"net/url"
+	"os"
 	"strings"
 
 	"golang.org/x/net/websocket"
@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	plog "go.opentelemetry.io/collector/pdata/plog"
 	pmetric "go.opentelemetry.io/collector/pdata/pmetric"
@@ -50,10 +51,16 @@ func (s streamKind) String() string {
 	}
 }
 
+var statusStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
+	Light: "#909090",
+	Dark:  "#626262",
+})
+
 type keyMap struct {
 	Logs    key.Binding
 	Metrics key.Binding
 	Traces  key.Binding
+	Pause   key.Binding
 	Quit    key.Binding
 }
 
@@ -61,6 +68,7 @@ var keys = keyMap{
 	Logs:    key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "logs")),
 	Metrics: key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "metrics")),
 	Traces:  key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "traces")),
+	Pause:   key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pause")),
 	Quit:    key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 }
 
@@ -68,6 +76,8 @@ type model struct {
 	conn    *websocket.Conn
 	spinner spinner.Model
 	help    help.Model
+
+	paused bool
 
 	logs    []string
 	metrics []string
@@ -78,11 +88,11 @@ type model struct {
 }
 
 func (m model) ShortHelp() []key.Binding {
-	return []key.Binding{keys.Logs, keys.Metrics, keys.Traces, keys.Quit}
+	return []key.Binding{keys.Logs, keys.Metrics, keys.Traces, keys.Pause, keys.Quit}
 }
 
 func (m model) FullHelp() [][]key.Binding {
-	return [][]key.Binding{{keys.Logs, keys.Metrics, keys.Traces, keys.Quit}}
+	return [][]key.Binding{{keys.Logs, keys.Metrics, keys.Traces, keys.Pause, keys.Quit}}
 }
 func newModel(conn *websocket.Conn, initial streamKind) model {
 	sp := spinner.New()
@@ -158,27 +168,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.active = streamMetrics
 		case key.Matches(msg, keys.Traces):
 			m.active = streamTraces
+		case key.Matches(msg, keys.Pause):
+			m.paused = !m.paused
 		}
 		var cmd tea.Cmd
 		m.help, cmd = m.help.Update(msg)
 		return m, cmd
 	case otelMsg:
-		kind, pretty := categorize(msg.Data)
-		switch kind {
-		case streamMetrics:
-			m.metrics = append(m.metrics, pretty)
-			if len(m.metrics) > 20 {
-				m.metrics = m.metrics[len(m.metrics)-20:]
-			}
-		case streamTraces:
-			m.traces = append(m.traces, pretty)
-			if len(m.traces) > 20 {
-				m.traces = m.traces[len(m.traces)-20:]
-			}
-		default:
-			m.logs = append(m.logs, pretty)
-			if len(m.logs) > 20 {
-				m.logs = m.logs[len(m.logs)-20:]
+		if !m.paused {
+			kind, pretty := categorize(msg.Data)
+			switch kind {
+			case streamMetrics:
+				m.metrics = append(m.metrics, pretty)
+				if len(m.metrics) > 20 {
+					m.metrics = m.metrics[len(m.metrics)-20:]
+				}
+			case streamTraces:
+				m.traces = append(m.traces, pretty)
+				if len(m.traces) > 20 {
+					m.traces = m.traces[len(m.traces)-20:]
+				}
+			default:
+				m.logs = append(m.logs, pretty)
+				if len(m.logs) > 20 {
+					m.logs = m.logs[len(m.logs)-20:]
+				}
 			}
 		}
 		return m, listenForMessage(m.conn)
@@ -195,10 +209,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) View() string {
 	var b strings.Builder
-	b.WriteString(m.spinner.View())
-	b.WriteString(" Streaming ")
-	b.WriteString(m.active.String())
-	b.WriteString("\n\n")
 
 	var msgs []string
 	switch m.active {
@@ -219,6 +229,16 @@ func (m model) View() string {
 		b.WriteString(m.err.Error())
 		b.WriteString("\n")
 	}
+	b.WriteString("\n")
+	var statusLine strings.Builder
+	if m.paused {
+		statusLine.WriteString("[PAUSED] ")
+	} else {
+		statusLine.WriteString(m.spinner.View())
+		statusLine.WriteString(" Streaming ")
+	}
+	statusLine.WriteString(m.active.String())
+	b.WriteString(statusStyle.Render(statusLine.String()))
 	b.WriteString("\n")
 	b.WriteString(m.help.View(m))
 	return b.String()
