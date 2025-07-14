@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -77,6 +78,9 @@ type model struct {
 	spinner spinner.Model
 	help    help.Model
 
+	viewport viewport.Model
+	ready    bool
+
 	paused bool
 
 	logs    []string
@@ -96,7 +100,7 @@ func (m model) FullHelp() [][]key.Binding {
 }
 func newModel(conn *websocket.Conn, initial streamKind) model {
 	sp := spinner.New()
-	return model{conn: conn, spinner: sp, help: help.New(), active: initial}
+	return model{conn: conn, spinner: sp, help: help.New(), active: initial, viewport: viewport.Model{}}
 }
 
 // listenForMessage waits for a single message from the websocket.
@@ -152,64 +156,7 @@ func categorize(data []byte) (streamKind, string) {
 	return streamLogs, string(data)
 }
 
-func (m model) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, listenForMessage(m.conn))
-}
-
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch {
-		case key.Matches(msg, keys.Quit):
-			return m, tea.Quit
-		case key.Matches(msg, keys.Logs):
-			m.active = streamLogs
-		case key.Matches(msg, keys.Metrics):
-			m.active = streamMetrics
-		case key.Matches(msg, keys.Traces):
-			m.active = streamTraces
-		case key.Matches(msg, keys.Pause):
-			m.paused = !m.paused
-		}
-		var cmd tea.Cmd
-		m.help, cmd = m.help.Update(msg)
-		return m, cmd
-	case otelMsg:
-		if !m.paused {
-			kind, pretty := categorize(msg.Data)
-			switch kind {
-			case streamMetrics:
-				m.metrics = append(m.metrics, pretty)
-				if len(m.metrics) > 20 {
-					m.metrics = m.metrics[len(m.metrics)-20:]
-				}
-			case streamTraces:
-				m.traces = append(m.traces, pretty)
-				if len(m.traces) > 20 {
-					m.traces = m.traces[len(m.traces)-20:]
-				}
-			default:
-				m.logs = append(m.logs, pretty)
-				if len(m.logs) > 20 {
-					m.logs = m.logs[len(m.logs)-20:]
-				}
-			}
-		}
-		return m, listenForMessage(m.conn)
-	case errMsg:
-		m.err = msg.error
-		return m, tea.Quit
-	case spinner.TickMsg:
-		var cmd tea.Cmd
-		m.spinner, cmd = m.spinner.Update(msg)
-		return m, cmd
-	}
-	return m, nil
-}
-
-func (m model) View() string {
-	var b strings.Builder
-
+func (m *model) syncViewportContent() {
 	var msgs []string
 	switch m.active {
 	case streamMetrics:
@@ -219,15 +166,84 @@ func (m model) View() string {
 	default:
 		msgs = m.logs
 	}
+	m.viewport.SetContent(strings.Join(msgs, "\n"))
+}
 
-	for _, msg := range msgs {
-		b.WriteString(msg)
-		b.WriteString("\n")
+func (m model) Init() tea.Cmd {
+	return tea.Batch(m.spinner.Tick, listenForMessage(m.conn))
+}
+
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch {
+		case key.Matches(msg, keys.Quit):
+			return m, tea.Quit
+		case key.Matches(msg, keys.Logs):
+			m.active = streamLogs
+			m.syncViewportContent()
+		case key.Matches(msg, keys.Metrics):
+			m.active = streamMetrics
+			m.syncViewportContent()
+		case key.Matches(msg, keys.Traces):
+			m.active = streamTraces
+			m.syncViewportContent()
+		case key.Matches(msg, keys.Pause):
+			m.paused = !m.paused
+		}
+		var c tea.Cmd
+		m.help, c = m.help.Update(msg)
+		cmds = append(cmds, c)
+	case tea.WindowSizeMsg:
+		verticalMarginHeight := 2
+		if !m.ready {
+			m.viewport = viewport.New(msg.Width, msg.Height-verticalMarginHeight)
+			m.viewport.YPosition = 0
+			m.ready = true
+		} else {
+			m.viewport.Width = msg.Width
+			m.viewport.Height = msg.Height - verticalMarginHeight
+		}
+		m.syncViewportContent()
+	case otelMsg:
+		if !m.paused {
+			kind, pretty := categorize(msg.Data)
+			switch kind {
+			case streamMetrics:
+				m.metrics = append(m.metrics, pretty)
+			case streamTraces:
+				m.traces = append(m.traces, pretty)
+			default:
+				m.logs = append(m.logs, pretty)
+			}
+			m.syncViewportContent()
+		}
+		cmds = append(cmds, listenForMessage(m.conn))
+	case errMsg:
+		m.err = msg.error
+		return m, tea.Quit
+	case spinner.TickMsg:
+		var c tea.Cmd
+		m.spinner, c = m.spinner.Update(msg)
+		cmds = append(cmds, c)
 	}
+
+	var c tea.Cmd
+	m.viewport, c = m.viewport.Update(msg)
+	cmds = append(cmds, c)
+
+	return m, tea.Batch(cmds...)
+}
+
+func (m model) View() string {
+	var b strings.Builder
+
+	b.WriteString(m.viewport.View())
 	if m.err != nil {
-		b.WriteString("error: ")
+		b.WriteString("\nerror: ")
 		b.WriteString(m.err.Error())
-		b.WriteString("\n")
 	}
 	b.WriteString("\n")
 	var statusLine strings.Builder
