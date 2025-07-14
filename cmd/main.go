@@ -218,6 +218,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			default:
 				m.logs = append(m.logs, pretty)
 			}
+			m.viewport.GotoBottom()
 			m.syncViewportContent()
 		}
 		cmds = append(cmds, listenForMessage(m.conn))
