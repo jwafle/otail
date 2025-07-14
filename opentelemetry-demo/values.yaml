@@ -1,20 +1,5 @@
 opentelemetry-collector:
-  extraContainers:
-    - name: tails
-      image: ghcr.io/jaronoff97/tails:v0.0.8
-      env:
-        - name: SECRET_KEY_BASE
-          value: ycLPy0iMVR1IYyttJX0CytDkyFWejKLzNBEvvd35UYwlc5CYZkDbs/FRU07xLbVeVtteVk/zDH0HGxc1Gz/saA==
-      ports:
-        - containerPort: 4000
   config:
-    extensions:
-      opamp:
-        server:
-          ws:
-            endpoint: ws://127.0.0.1:4000/v1/opamp
-            tls:
-              insecure: true
     processors:
       remotetap:
         endpoint: localhost:12001
@@ -22,11 +7,9 @@ opentelemetry-collector:
     service:
       extensions:
         - health_check
-        - opamp
       pipelines:
         logs:
           exporters:
-            - opensearch
             - debug
           processors:
             - k8sattributes
@@ -38,7 +21,6 @@ opentelemetry-collector:
             - otlp
         metrics:
           exporters:
-            - otlphttp/prometheus
             - debug
           processors:
             - k8sattributes
@@ -53,7 +35,6 @@ opentelemetry-collector:
             - spanmetrics
         traces:
           exporters:
-            - otlp
             - debug
             - spanmetrics
           processors:
