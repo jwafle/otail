@@ -18,7 +18,6 @@ import (
 
 	"github.com/jwafle/otail/internal/telemetry"
 	"github.com/jwafle/otail/internal/transport"
-	"github.com/jwafle/otail/internal/ui/common"
 )
 
 /* ------------------------------------------------------------------ */
@@ -67,6 +66,15 @@ var statusStyle = lipgloss.NewStyle().Foreground(
 	lipgloss.AdaptiveColor{Light: "#909090", Dark: "#626262"},
 )
 
+var cursorStyle = lipgloss.NewStyle().Reverse(true)
+
+var msgHighlightStyle = lipgloss.NewStyle().
+	Background(lipgloss.AdaptiveColor{Light: "#404040", Dark: "#303030"})
+
+// cursorBuffer is the number of lines to keep between the cursor and the edge
+// of the viewport while navigating.
+const cursorBuffer = 3
+
 /* ------------------------------------------------------------------ */
 /* Model                                                              */
 /* ------------------------------------------------------------------ */
@@ -85,12 +93,84 @@ type model struct {
 	/* viewport */
 	viewport viewport.Model
 
+	/* cursor */
+	cursorLine int
+	cursorMsg  *item
+
 	/* data */
-	logs, metrics, traces []string
+	logs, metrics, traces []item
 	active                telemetry.Kind
 
 	/* error handling */
 	err error
+}
+
+func (m *model) activeItems() []item {
+	switch m.active {
+	case telemetry.KindMetrics:
+		return m.metrics
+	case telemetry.KindTraces:
+		return m.traces
+	default:
+		return m.logs
+	}
+}
+
+func (m *model) totalLines() int {
+	items := m.activeItems()
+	n := 0
+	for _, it := range items {
+		n += len(it.Lines)
+	}
+	return n
+}
+
+func (m *model) cursorMsgIndex() int {
+	line := 0
+	items := m.activeItems()
+	for i, it := range items {
+		if m.cursorLine < line+len(it.Lines) {
+			return i
+		}
+		line += len(it.Lines)
+	}
+	if len(items) == 0 {
+		return 0
+	}
+	return len(items) - 1
+}
+
+func (m *model) ensureCursorVisible() {
+	if !m.paused {
+		return
+	}
+	if m.cursorLine < m.viewport.YOffset {
+		m.viewport.SetYOffset(m.cursorLine)
+	} else if m.cursorLine >= m.viewport.YOffset+m.viewport.Height {
+		m.viewport.SetYOffset(m.cursorLine - m.viewport.Height + 1)
+	}
+}
+
+func (m *model) cursorUp() {
+	if m.cursorLine == 0 {
+		return
+	}
+	m.cursorLine--
+	if m.cursorLine < m.viewport.YOffset+cursorBuffer && !m.viewport.AtTop() {
+		m.viewport.SetYOffset(m.viewport.YOffset - 1)
+	}
+}
+
+func (m *model) cursorDown() {
+	total := m.totalLines()
+	if m.cursorLine >= total-1 {
+		return
+	}
+	m.cursorLine++
+	bottom := m.viewport.YOffset + m.viewport.VisibleLineCount() - cursorBuffer
+	if m.cursorLine >= bottom && !m.viewport.AtBottom() {
+		m.viewport.SetYOffset(m.viewport.YOffset + 1)
+	}
 }
 
 /* ------------- tea.Model interface -------------------------------- */
@@ -122,6 +202,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncViewport()
 		case key.Matches(msg, keys.Pause):
 			m.paused = !m.paused
+			if m.paused {
+				m.cursorLine = m.viewport.YOffset + m.viewport.VisibleLineCount() - 1
+				if m.cursorLine < 0 {
+					m.cursorLine = 0
+				}
+			}
+		case m.paused && key.Matches(msg, m.viewport.KeyMap.Up):
+			m.cursorUp()
+			m.ensureCursorVisible()
+			m.syncViewport()
+			return m, nil
+		case m.paused && key.Matches(msg, m.viewport.KeyMap.Down):
+			m.cursorDown()
+			m.ensureCursorVisible()
+			m.syncViewport()
+			return m, nil
 		}
 		var c tea.Cmd
 		m.help, c = m.help.Update(msg)
@@ -139,14 +235,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case telemetry.Message:
 		if !m.paused {
-			stylizedMsg := common.HighlightKeys(msg.Pretty)
+			itm := newItem(msg)
 			switch msg.Kind {
 			case telemetry.KindMetrics:
-				m.metrics = append(m.metrics, stylizedMsg)
+				m.metrics = append(m.metrics, itm)
 			case telemetry.KindTraces:
-				m.traces = append(m.traces, stylizedMsg)
+				m.traces = append(m.traces, itm)
 			default:
-				m.logs = append(m.logs, stylizedMsg)
+				m.logs = append(m.logs, itm)
 			}
 			m.viewport.GotoBottom()
 			m.syncViewport()
@@ -165,8 +261,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	/* viewport internal updates */
 	var c tea.Cmd
+	oldOffset := m.viewport.YOffset
 	m.viewport, c = m.viewport.Update(msg)
 	cmds = append(cmds, c)
+	if m.paused {
+		delta := m.viewport.YOffset - oldOffset
+		if delta != 0 {
+			m.cursorLine += delta
+		}
+		if m.cursorLine < 0 {
+			m.cursorLine = 0
+		}
+		if total := m.totalLines(); total > 0 && m.cursorLine >= total {
+			m.cursorLine = total - 1
+		}
+		m.ensureCursorVisible()
+		m.syncViewport()
+	}
 
 	return m, tea.Batch(cmds...)
 }
@@ -199,7 +310,7 @@ func (m model) View() string {
 /* ------------- helpers -------------------------------------------- */
 
 func (m *model) syncViewport() {
-	var src []string
+	var src []item
 	switch m.active {
 	case telemetry.KindMetrics:
 		src = m.metrics
@@ -208,7 +319,37 @@ func (m *model) syncViewport() {
 	default:
 		src = m.logs
 	}
-	m.viewport.SetContent(strings.Join(src, "\n"))
+	total := 0
+	for _, it := range src {
+		total += len(it.Lines)
+	}
+	if m.cursorLine >= total {
+		m.cursorLine = total - 1
+	}
+
+	var b strings.Builder
+	line := 0
+	var current *item
+	for i := range src {
+		highlight := m.paused && i == m.cursorMsgIndex()
+		for j, l := range src[i].Lines {
+			content := l
+			if highlight {
+				content = msgHighlightStyle.Render(content)
+			}
+			if m.paused && line == m.cursorLine {
+				content = cursorStyle.Render(content)
+				current = &src[i]
+			}
+			b.WriteString(content)
+			line++
+			if i < len(src)-1 || j < len(src[i].Lines)-1 {
+				b.WriteString("\n")
+			}
+		}
+	}
+	m.cursorMsg = current
+	m.viewport.SetContent(b.String())
 }
 
 /* readFrame returns a command that receives one frame from the stream */
