@@ -109,6 +109,10 @@ var (
 		BorderRight(false)
 )
 
+// cursorBuffer is the number of lines to keep between the cursor and the edge
+// of the viewport while navigating.
+const cursorBuffer = 3
+
 /* ------------------------------------------------------------------ */
 /* Model                                                              */
 /* ------------------------------------------------------------------ */
@@ -185,6 +189,28 @@ func (m *model) ensureCursorVisible() {
 	}
 }
 
+func (m *model) cursorUp() {
+	if m.cursorLine == 0 {
+		return
+	}
+	m.cursorLine--
+	if m.cursorLine < m.viewport.YOffset+cursorBuffer && !m.viewport.AtTop() {
+		m.viewport.SetYOffset(m.viewport.YOffset - 1)
+	}
+}
+
+func (m *model) cursorDown() {
+	total := m.totalLines()
+	if m.cursorLine >= total-1 {
+		return
+	}
+	m.cursorLine++
+	bottom := m.viewport.YOffset + m.viewport.VisibleLineCount() - cursorBuffer
+	if m.cursorLine >= bottom && !m.viewport.AtBottom() {
+		m.viewport.SetYOffset(m.viewport.YOffset + 1)
+	}
+}
+
 /* ------------- tea.Model interface -------------------------------- */
 
 func (m model) Init() tea.Cmd {
@@ -220,6 +246,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cursorLine = 0
 				}
 			}
+		case m.paused && key.Matches(msg, m.viewport.KeyMap.Up):
+			m.cursorUp()
+			m.ensureCursorVisible()
+			m.syncViewport()
+			return m, nil
+		case m.paused && key.Matches(msg, m.viewport.KeyMap.Down):
+			m.cursorDown()
+			m.ensureCursorVisible()
+			m.syncViewport()
+			return m, nil
 		}
 		var c tea.Cmd
 		m.help, c = m.help.Update(msg)
