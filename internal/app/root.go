@@ -18,7 +18,6 @@ import (
 
 	"github.com/jwafle/otail/internal/telemetry"
 	"github.com/jwafle/otail/internal/transport"
-	"github.com/jwafle/otail/internal/ui/common"
 )
 
 /* ------------------------------------------------------------------ */
@@ -28,15 +27,18 @@ import (
 type keyMap struct {
 	Logs, Metrics, Traces key.Binding
 	Pause, Quit, Yank     key.Binding
+	HalfDown, HalfUp      key.Binding
 }
 
 var keys = keyMap{
-	Logs:    key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "logs")),
-	Metrics: key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "metrics")),
-	Traces:  key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "traces")),
-	Pause:   key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pause")),
-	Quit:    key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
-	Yank:    key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "yank to clipboard")),
+	Logs:     key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "logs")),
+	Metrics:  key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "metrics")),
+	Traces:   key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "traces")),
+	Pause:    key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pause")),
+	Quit:     key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
+	Yank:     key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "yank to clipboard")),
+	HalfDown: key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("^D", "half page down")),
+	HalfUp:   key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("^U", "half page up")),
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
@@ -45,6 +47,8 @@ func (k keyMap) ShortHelp() []key.Binding {
 		k.Metrics,
 		k.Traces,
 		k.Pause,
+		k.HalfDown,
+		k.HalfUp,
 		k.Quit,
 		k.Yank,
 	}
@@ -57,6 +61,8 @@ func (k keyMap) FullHelp() [][]key.Binding {
 			k.Metrics,
 			k.Traces,
 			k.Pause,
+			k.HalfDown,
+			k.HalfUp,
 			k.Quit,
 			k.Yank,
 		},
@@ -86,11 +92,26 @@ type model struct {
 	viewport viewport.Model
 
 	/* data */
-	logs, metrics, traces []string
+	logs, metrics, traces *store
 	active                telemetry.Kind
+
+	/* cursor */
+	cursorLine int
+	cursorMsg  *telemetry.Message
 
 	/* error handling */
 	err error
+}
+
+func (m *model) activeStore() *store {
+	switch m.active {
+	case telemetry.KindMetrics:
+		return m.metrics
+	case telemetry.KindTraces:
+		return m.traces
+	default:
+		return m.logs
+	}
 }
 
 /* ------------- tea.Model interface -------------------------------- */
@@ -122,6 +143,55 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncViewport()
 		case key.Matches(msg, keys.Pause):
 			m.paused = !m.paused
+			if m.paused {
+				st := m.activeStore()
+				if st != nil {
+					last := m.viewport.YOffset + m.viewport.Height - 1
+					if last >= len(st.lines) {
+						last = len(st.lines) - 1
+					}
+					if last < 0 {
+						last = 0
+					}
+					m.cursorLine = last
+					if e := st.messageForLine(last); e != nil {
+						m.cursorMsg = &e.Msg
+					} else {
+						m.cursorMsg = nil
+					}
+				}
+			} else {
+				m.cursorMsg = nil
+			}
+			m.syncViewport()
+		case key.Matches(msg, keys.HalfDown):
+			if m.paused {
+				move := m.viewport.Height / 2
+				m.viewport.LineDown(move)
+				m.cursorLine += move
+				st := m.activeStore()
+				if m.cursorLine >= len(st.lines) {
+					m.cursorLine = len(st.lines) - 1
+				}
+				if e := st.messageForLine(m.cursorLine); e != nil {
+					m.cursorMsg = &e.Msg
+				}
+				m.syncViewport()
+			}
+		case key.Matches(msg, keys.HalfUp):
+			if m.paused {
+				move := m.viewport.Height / 2
+				m.viewport.LineUp(move)
+				m.cursorLine -= move
+				if m.cursorLine < 0 {
+					m.cursorLine = 0
+				}
+				st := m.activeStore()
+				if e := st.messageForLine(m.cursorLine); e != nil {
+					m.cursorMsg = &e.Msg
+				}
+				m.syncViewport()
+			}
 		}
 		var c tea.Cmd
 		m.help, c = m.help.Update(msg)
@@ -139,14 +209,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case telemetry.Message:
 		if !m.paused {
-			stylizedMsg := common.HighlightKeys(msg.Pretty)
 			switch msg.Kind {
 			case telemetry.KindMetrics:
-				m.metrics = append(m.metrics, stylizedMsg)
+				m.metrics.append(msg)
 			case telemetry.KindTraces:
-				m.traces = append(m.traces, stylizedMsg)
+				m.traces.append(msg)
 			default:
-				m.logs = append(m.logs, stylizedMsg)
+				m.logs.append(msg)
 			}
 			m.viewport.GotoBottom()
 			m.syncViewport()
@@ -199,16 +268,12 @@ func (m model) View() string {
 /* ------------- helpers -------------------------------------------- */
 
 func (m *model) syncViewport() {
-	var src []string
-	switch m.active {
-	case telemetry.KindMetrics:
-		src = m.metrics
-	case telemetry.KindTraces:
-		src = m.traces
-	default:
-		src = m.logs
+	st := m.activeStore()
+	if st == nil {
+		m.viewport.SetContent("")
+		return
 	}
-	m.viewport.SetContent(strings.Join(src, "\n"))
+	m.viewport.SetContent(st.render(m.paused, m.cursorLine))
 }
 
 /* readFrame returns a command that receives one frame from the stream */
@@ -260,6 +325,9 @@ func Run(endpoint string, initial telemetry.Kind) error {
 		spinner:   spinner.New(),
 		help:      help.New(),
 		active:    initial,
+		logs:      newStore(),
+		metrics:   newStore(),
+		traces:    newStore(),
 	}
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
