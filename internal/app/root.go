@@ -71,6 +71,44 @@ var cursorStyle = lipgloss.NewStyle().Reverse(true)
 var msgHighlightStyle = lipgloss.NewStyle().
 	Background(lipgloss.AdaptiveColor{Light: "#404040", Dark: "#303030"})
 
+// Tabs --------------------------------------------------------------------
+
+var (
+	activeTabBorder = lipgloss.Border{
+		Top:         "─",
+		Bottom:      " ",
+		Left:        "│",
+		Right:       "│",
+		TopLeft:     "╭",
+		TopRight:    "╮",
+		BottomLeft:  "┘",
+		BottomRight: "└",
+	}
+
+	tabBorder = lipgloss.Border{
+		Top:         "─",
+		Bottom:      "─",
+		Left:        "│",
+		Right:       "│",
+		TopLeft:     "╭",
+		TopRight:    "╮",
+		BottomLeft:  "┴",
+		BottomRight: "┴",
+	}
+
+	tabStyle = lipgloss.NewStyle().
+			Border(tabBorder, true).
+			BorderForeground(lipgloss.Color("214")).
+			Padding(0, 1)
+
+	activeTabStyle = tabStyle.Border(activeTabBorder, true)
+
+	tabGap = tabStyle.
+		BorderTop(false).
+		BorderLeft(false).
+		BorderRight(false)
+)
+
 /* ------------------------------------------------------------------ */
 /* Model                                                              */
 /* ------------------------------------------------------------------ */
@@ -188,7 +226,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, c)
 
 	case tea.WindowSizeMsg:
-		verticalMargin := 2
+		verticalMargin := 3
 		if !m.ready {
 			m.viewport = viewport.New(msg.Width, msg.Height-verticalMargin)
 			m.ready = true
@@ -249,6 +287,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) View() string {
 	var b strings.Builder
 
+	b.WriteString(m.renderTabs())
+	b.WriteString("\n")
 	b.WriteString(m.viewport.View())
 	if m.err != nil {
 		b.WriteString("\nerror: ")
@@ -314,6 +354,34 @@ func (m *model) syncViewport() {
 	}
 	m.cursorMsg = current
 	m.viewport.SetContent(b.String())
+}
+
+func (m model) renderTabs() string {
+	tabs := []string{
+		tabStyle.Render("Logs"),
+		tabStyle.Render("Metrics"),
+		tabStyle.Render("Traces"),
+	}
+	switch m.active {
+	case telemetry.KindMetrics:
+		tabs[1] = activeTabStyle.Render("Metrics")
+	case telemetry.KindTraces:
+		tabs[2] = activeTabStyle.Render("Traces")
+	default:
+		tabs[0] = activeTabStyle.Render("Logs")
+	}
+	row := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
+	if m.viewport.Width > 0 {
+		gapWidth := m.viewport.Width - lipgloss.Width(row)
+		if gapWidth < 0 {
+			gapWidth = 0
+		}
+		row = lipgloss.JoinHorizontal(lipgloss.Bottom,
+			row,
+			tabGap.Render(strings.Repeat(" ", gapWidth)),
+		)
+	}
+	return row
 }
 
 /* readFrame returns a command that receives one frame from the stream */
