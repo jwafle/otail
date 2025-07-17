@@ -262,7 +262,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, c)
 
 	case tea.WindowSizeMsg:
-		verticalMargin := 3
+		verticalMargin := 5
 		if !m.ready {
 			m.viewport = viewport.New(msg.Width, msg.Height-verticalMargin)
 			m.ready = true
