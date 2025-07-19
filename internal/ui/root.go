@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"golang.design/x/clipboard"
 
 	"github.com/jwafle/otail/internal/telemetry"
 	"github.com/jwafle/otail/internal/transport"
@@ -196,6 +197,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cursorLine = 0
 				}
 			}
+		case m.paused && key.Matches(msg, Keys.Yank):
+			if m.cursorMsg == nil {
+				return m, nil // nothing to yank
+			}
+			clipboard.Write(clipboard.FmtText, []byte(strings.Join(m.cursorMsg.IndentedLines, "\n")))
+			return m, nil
 		case m.paused && key.Matches(msg, m.viewport.KeyMap.Up):
 			m.cursorUp()
 			m.ensureCursorVisible()

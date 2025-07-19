@@ -9,6 +9,7 @@ require (
 	github.com/lucasb-eyer/go-colorful v1.2.0
 	github.com/muesli/gamut v0.3.1
 	go.opentelemetry.io/collector/pdata v1.35.0
+	golang.design/x/clipboard v0.7.1
 	golang.org/x/net v0.42.0
 	golang.org/x/term v0.33.0
 )
@@ -37,6 +38,9 @@ require (
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/xrash/smetrics v0.0.0-20201216005158-039620a65673 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
+	golang.org/x/exp/shiny v0.0.0-20250606033433-dcc06ee1d476 // indirect
+	golang.org/x/image v0.28.0 // indirect
+	golang.org/x/mobile v0.0.0-20250606033058-a2a15c67f36f // indirect
 	golang.org/x/sync v0.16.0 // indirect
 	golang.org/x/sys v0.34.0 // indirect
 	golang.org/x/text v0.27.0 // indirect
