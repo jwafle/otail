@@ -373,7 +373,15 @@ func (m *model) syncViewport() {
 	for i := range src {
 		highlight := m.paused && i == m.cursorMsgIndex()
 		for j, l := range src[i].Lines {
-			content := l
+			padded := l
+			if highlight || (m.paused && line == m.cursorLine) {
+				if w := m.viewport.Width; w > 0 {
+					if diff := w - lipgloss.Width(padded); diff > 0 {
+						padded += strings.Repeat(" ", diff)
+					}
+				}
+			}
+			content := padded
 			if highlight {
 				content = msgHighlightStyle.Render(content)
 			}
