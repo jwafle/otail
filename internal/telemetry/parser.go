@@ -4,6 +4,7 @@ package telemetry
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	plog "go.opentelemetry.io/collector/pdata/plog"
 	pmetric "go.opentelemetry.io/collector/pdata/pmetric"
@@ -35,9 +36,8 @@ func (k Kind) String() string {
 
 // Message is the canonical form that UI and transport layers consume.
 type Message struct {
-	Kind   Kind   // logs, metrics, traces, or unknown
-	Pretty string // prettified JSON for display
-	Raw    []byte // original payload (for copy/yank, saving, etc.)
+	Kind          Kind     // logs, metrics, traces, or unknown
+	IndentedLines []string // indented, parsed JSON for ui
 }
 
 // Parse inspects a raw websocket frame and classifies it.
@@ -45,24 +45,24 @@ type Message struct {
 func Parse(data []byte) Message {
 	// Helpers -------------------------------------------------------------
 
-	pretty := func(b []byte) string {
+	pretty := func(b []byte) []string {
 		var v interface{}
 		// If we can re-indent nicely, do so; otherwise fall back.
 		if json.Unmarshal(b, &v) == nil {
 			if pb, err := json.MarshalIndent(v, "", "  "); err == nil {
-				return string(pb)
+				return strings.Split(string(pb), "\n")
 			}
 		}
-		return string(b)
+		return []string{string(b)}
 	}
 
 	asMsg := func(kind Kind, raw []byte, marshal func() ([]byte, error)) Message {
 		out, err := marshal()
 		if err != nil {
 			// Fallback: just show the incoming bytes.
-			return Message{Kind: kind, Pretty: pretty(raw), Raw: raw}
+			return Message{Kind: kind, IndentedLines: pretty(raw)}
 		}
-		return Message{Kind: kind, Pretty: pretty(out), Raw: raw}
+		return Message{Kind: kind, IndentedLines: pretty(out)}
 	}
 
 	// Logs ----------------------------------------------------------------
@@ -94,9 +94,8 @@ func Parse(data []byte) Message {
 
 	// Unknown or malformed payload ---------------------------------------
 	return Message{
-		Kind:   KindUnknown,
-		Pretty: pretty(data),
-		Raw:    data,
+		Kind:          KindUnknown,
+		IndentedLines: pretty(data),
 	}
 }
 

@@ -1,4 +1,4 @@
-package app
+package ui
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -24,90 +25,39 @@ import (
 /* Key-bindings & shared styles                                       */
 /* ------------------------------------------------------------------ */
 
-type keyMap struct {
-	Logs, Metrics, Traces key.Binding
-	Pause, Quit, Yank     key.Binding
-}
-
-var keys = keyMap{
-	Logs:    key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "logs")),
-	Metrics: key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "metrics")),
-	Traces:  key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "traces")),
-	Pause:   key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pause")),
-	Quit:    key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
-	Yank:    key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "yank to clipboard")),
-}
-
-func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{
-		k.Logs,
-		k.Metrics,
-		k.Traces,
-		k.Pause,
-		k.Quit,
-		k.Yank,
-	}
-}
-
-func (k keyMap) FullHelp() [][]key.Binding {
-	return [][]key.Binding{
-		{
-			k.Logs,
-			k.Metrics,
-			k.Traces,
-			k.Pause,
-			k.Quit,
-			k.Yank,
-		},
-	}
-}
-
 var statusStyle = lipgloss.NewStyle().Foreground(
 	lipgloss.AdaptiveColor{Light: "#909090", Dark: "#626262"},
 )
 
-var cursorStyle = lipgloss.NewStyle().Reverse(true)
-
 var msgHighlightStyle = lipgloss.NewStyle().
 	Background(lipgloss.AdaptiveColor{Light: "#404040", Dark: "#303030"})
+var msgHighlightJsonKeyStyle = msgHighlightStyle.Bold(true).Foreground(lipgloss.Color("214"))
+
+var cursorStyle = msgHighlightStyle.Reverse(true)
+var cursorJsonKeyStyle = cursorStyle.Bold(true).Foreground(lipgloss.Color("214"))
+
+// jsonKeyRegex matches JSON keys (quoted key followed by colon).
+var jsonKeyRegex = regexp.MustCompile(`"[^"\\]*"\s*:`)
+
+// highlightJsonKeys applies baseStyle to all non-key text and keyStyle to JSON keys in the string.
+func highlightJsonKeys(s string, baseStyle, keyStyle lipgloss.Style) string {
+	var b strings.Builder
+	last := 0
+	for _, loc := range jsonKeyRegex.FindAllStringIndex(s, -1) {
+		start, end := loc[0], loc[1]
+		if last < start {
+			b.WriteString(baseStyle.Render(s[last:start]))
+		}
+		b.WriteString(keyStyle.Render(s[start:end]))
+		last = end
+	}
+	if last < len(s) {
+		b.WriteString(baseStyle.Render(s[last:]))
+	}
+	return b.String()
+}
 
 // Tabs --------------------------------------------------------------------
-
-var (
-	activeTabBorder = lipgloss.Border{
-		Top:         "─",
-		Bottom:      " ",
-		Left:        "│",
-		Right:       "│",
-		TopLeft:     "╭",
-		TopRight:    "╮",
-		BottomLeft:  "┘",
-		BottomRight: "└",
-	}
-
-	tabBorder = lipgloss.Border{
-		Top:         "─",
-		Bottom:      "─",
-		Left:        "│",
-		Right:       "│",
-		TopLeft:     "╭",
-		TopRight:    "╮",
-		BottomLeft:  "┴",
-		BottomRight: "┴",
-	}
-
-	tabStyle = lipgloss.NewStyle().
-			Border(tabBorder, true).
-			BorderForeground(lipgloss.Color("214")).
-			Padding(0, 1)
-
-	activeTabStyle = tabStyle.Border(activeTabBorder, true)
-
-	tabGap = tabStyle.
-		BorderTop(false).
-		BorderLeft(false).
-		BorderRight(false)
-)
 
 // cursorBuffer is the number of lines to keep between the cursor and the edge
 // of the viewport while navigating.
@@ -129,22 +79,22 @@ type model struct {
 	paused  bool
 
 	/* viewport */
-	viewport viewport.Model
+	viewport Viewport
 
 	/* cursor */
 	cursorLine int
-	cursorMsg  *item
+	cursorMsg  *telemetry.Message
 
 	/* data */
-	logs, metrics, traces []item
-	active                telemetry.Kind
+	logs, metrics, traces []telemetry.Message
+	Active                telemetry.Kind
 
 	/* error handling */
 	err error
 }
 
-func (m *model) activeItems() []item {
-	switch m.active {
+func (m *model) activeMessages() []telemetry.Message {
+	switch m.Active {
 	case telemetry.KindMetrics:
 		return m.metrics
 	case telemetry.KindTraces:
@@ -155,27 +105,27 @@ func (m *model) activeItems() []item {
 }
 
 func (m *model) totalLines() int {
-	items := m.activeItems()
+	msgs := m.activeMessages()
 	n := 0
-	for _, it := range items {
-		n += len(it.Lines)
+	for _, it := range msgs {
+		n += len(it.IndentedLines)
 	}
 	return n
 }
 
 func (m *model) cursorMsgIndex() int {
 	line := 0
-	items := m.activeItems()
-	for i, it := range items {
-		if m.cursorLine < line+len(it.Lines) {
+	msgs := m.activeMessages()
+	for i, msg := range msgs {
+		if m.cursorLine < line+len(msg.IndentedLines) {
 			return i
 		}
-		line += len(it.Lines)
+		line += len(msg.IndentedLines)
 	}
-	if len(items) == 0 {
+	if len(msgs) == 0 {
 		return 0
 	}
-	return len(items) - 1
+	return len(msgs) - 1
 }
 
 func (m *model) ensureCursorVisible() {
@@ -226,19 +176,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
-		case key.Matches(msg, keys.Quit):
+		case key.Matches(msg, Keys.Quit):
 			m.ctxCancel() // stop transport goroutine
 			return m, tea.Quit
-		case key.Matches(msg, keys.Logs):
-			m.active = telemetry.KindLogs
+		case key.Matches(msg, Keys.Logs):
+			m.Active = telemetry.KindLogs
 			m.syncViewport()
-		case key.Matches(msg, keys.Metrics):
-			m.active = telemetry.KindMetrics
+		case key.Matches(msg, Keys.Metrics):
+			m.Active = telemetry.KindMetrics
 			m.syncViewport()
-		case key.Matches(msg, keys.Traces):
-			m.active = telemetry.KindTraces
+		case key.Matches(msg, Keys.Traces):
+			m.Active = telemetry.KindTraces
 			m.syncViewport()
-		case key.Matches(msg, keys.Pause):
+		case key.Matches(msg, Keys.Pause):
 			m.paused = !m.paused
 			if m.paused {
 				m.cursorLine = m.viewport.YOffset + m.viewport.VisibleLineCount() - 1
@@ -264,7 +214,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		verticalMargin := 5
 		if !m.ready {
-			m.viewport = viewport.New(msg.Width, msg.Height-verticalMargin)
+			m.viewport = Viewport{viewport.New(msg.Width, msg.Height-verticalMargin)}
 			m.ready = true
 		} else {
 			m.viewport.Width, m.viewport.Height = msg.Width, msg.Height-verticalMargin
@@ -273,14 +223,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case telemetry.Message:
 		if !m.paused {
-			itm := newItem(msg)
 			switch msg.Kind {
 			case telemetry.KindMetrics:
-				m.metrics = append(m.metrics, itm)
+				m.metrics = append(m.metrics, msg)
 			case telemetry.KindTraces:
-				m.traces = append(m.traces, itm)
+				m.traces = append(m.traces, msg)
 			default:
-				m.logs = append(m.logs, itm)
+				m.logs = append(m.logs, msg)
 			}
 			m.viewport.GotoBottom()
 			m.syncViewport()
@@ -300,7 +249,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	/* viewport internal updates */
 	var c tea.Cmd
 	oldOffset := m.viewport.YOffset
-	m.viewport, c = m.viewport.Update(msg)
+	viewport, c := m.viewport.Update(msg)
+	m.viewport = Viewport{viewport}
 	cmds = append(cmds, c)
 	if m.paused {
 		delta := m.viewport.YOffset - oldOffset
@@ -323,13 +273,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) View() string {
 	var b strings.Builder
 
-	b.WriteString(m.renderTabs())
+	b.WriteString(m.RenderTabs())
 	b.WriteString("\n")
 	b.WriteString(m.viewport.View())
-	if m.err != nil {
-		b.WriteString("\nerror: ")
-		b.WriteString(m.err.Error())
-	}
 	b.WriteString("\n")
 
 	var status strings.Builder
@@ -339,10 +285,10 @@ func (m model) View() string {
 		status.WriteString(m.spinner.View())
 		status.WriteString(" Streaming ")
 	}
-	status.WriteString(m.active.String())
+	status.WriteString(m.Active.String())
 	b.WriteString(statusStyle.Render(status.String()))
 	b.WriteString("\n")
-	b.WriteString(m.help.View(keys))
+	b.WriteString(m.help.View(Keys))
 
 	return b.String()
 }
@@ -350,8 +296,8 @@ func (m model) View() string {
 /* ------------- helpers -------------------------------------------- */
 
 func (m *model) syncViewport() {
-	var src []item
-	switch m.active {
+	var src []telemetry.Message
+	switch m.Active {
 	case telemetry.KindMetrics:
 		src = m.metrics
 	case telemetry.KindTraces:
@@ -360,8 +306,8 @@ func (m *model) syncViewport() {
 		src = m.logs
 	}
 	total := 0
-	for _, it := range src {
-		total += len(it.Lines)
+	for _, msg := range src {
+		total += len(msg.IndentedLines)
 	}
 	if m.cursorLine >= total {
 		m.cursorLine = total - 1
@@ -369,55 +315,34 @@ func (m *model) syncViewport() {
 
 	var b strings.Builder
 	line := 0
-	var current *item
+	var current *telemetry.Message
 	for i := range src {
 		highlight := m.paused && i == m.cursorMsgIndex()
-		for j, l := range src[i].Lines {
-			content := l
-			if highlight {
-				content = msgHighlightStyle.Render(content)
+		for j, l := range src[i].IndentedLines {
+			padded := l
+			if highlight || (m.paused && line == m.cursorLine) {
+				if w := m.viewport.Width; w > 0 {
+					if diff := w - lipgloss.Width(padded); diff > 0 {
+						padded += strings.Repeat(" ", diff)
+					}
+				}
 			}
+			content := padded
 			if m.paused && line == m.cursorLine {
-				content = cursorStyle.Render(content)
+				content = highlightJsonKeys(content, cursorStyle, cursorJsonKeyStyle)
 				current = &src[i]
+			} else if highlight {
+				content = highlightJsonKeys(content, msgHighlightStyle, msgHighlightJsonKeyStyle)
 			}
 			b.WriteString(content)
 			line++
-			if i < len(src)-1 || j < len(src[i].Lines)-1 {
+			if i < len(src)-1 || j < len(src[i].IndentedLines)-1 {
 				b.WriteString("\n")
 			}
 		}
 	}
 	m.cursorMsg = current
 	m.viewport.SetContent(b.String())
-}
-
-func (m model) renderTabs() string {
-	tabs := []string{
-		tabStyle.Render("Logs"),
-		tabStyle.Render("Metrics"),
-		tabStyle.Render("Traces"),
-	}
-	switch m.active {
-	case telemetry.KindMetrics:
-		tabs[1] = activeTabStyle.Render("Metrics")
-	case telemetry.KindTraces:
-		tabs[2] = activeTabStyle.Render("Traces")
-	default:
-		tabs[0] = activeTabStyle.Render("Logs")
-	}
-	row := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
-	if m.viewport.Width > 0 {
-		gapWidth := m.viewport.Width - lipgloss.Width(row)
-		if gapWidth < 0 {
-			gapWidth = 0
-		}
-		row = lipgloss.JoinHorizontal(lipgloss.Bottom,
-			row,
-			tabGap.Render(strings.Repeat(" ", gapWidth)),
-		)
-	}
-	return row
 }
 
 /* readFrame returns a command that receives one frame from the stream */
@@ -468,7 +393,7 @@ func Run(endpoint string, initial telemetry.Kind) error {
 		ctxCancel: cancel,
 		spinner:   spinner.New(),
 		help:      help.New(),
-		active:    initial,
+		Active:    initial,
 	}
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err

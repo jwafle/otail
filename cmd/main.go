@@ -3,8 +3,8 @@ package main
 import (
 	"flag"
 
-	"github.com/jwafle/otail/internal/app"
 	"github.com/jwafle/otail/internal/telemetry"
+	"github.com/jwafle/otail/internal/ui"
 )
 
 func main() {
@@ -14,7 +14,7 @@ func main() {
 	flag.Parse()
 
 	initial := telemetry.KindLogs // default; let cli flags adjust if you like
-	if err := app.Run(endpoint, initial); err != nil {
+	if err := ui.Run(endpoint, initial); err != nil {
 		panic(err)
 	}
 }

@@ -95,11 +95,6 @@ func Dial(ctx context.Context, endpoint, origin string, cfg *Config) (*Stream, e
 			}
 			backoffAttempt = 0 // successful dial → reset
 
-			// Optional: keep-alive pings.
-			if cfg.PingInterval > 0 {
-				go pingLoop(ctx, c, cfg.PingInterval, logger)
-			}
-
 			if err = readLoop(ctx, c, s.msgCh); err != nil {
 				// Connection dropped – try again unless context cancelled.
 				if ctx.Err() == nil {
@@ -138,28 +133,6 @@ func readLoop(ctx context.Context, c *websocket.Conn, out chan<- []byte) error {
 		select {
 		case out <- frame:
 		default:
-		}
-	}
-}
-
-// pingLoop sends a WebSocket Ping every interval until ctx.Done().
-func pingLoop(ctx context.Context, c *websocket.Conn, interval time.Duration, l *log.Logger) {
-	t := time.NewTicker(interval)
-	defer t.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			// RFC-6455 ping frame is opcode 0x9 with zero-length payload.
-			// x/net/websocket doesn’t expose opcodes, but WriteControlMsg = 0x9.
-			if err := c.SetDeadline(time.Now().Add(interval)); err == nil {
-				if _, err := c.Write([]byte{0x89, 0}); err != nil {
-					l.Printf("ping failed: %v", err)
-					return
-				}
-			}
 		}
 	}
 }
