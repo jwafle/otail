@@ -43,7 +43,7 @@ var (
 		BorderRight(false)
 )
 
-func (m model) RenderTabs() string {
+func (m Model) RenderTabs() string {
 	tabs := []string{
 		tabStyle.Render("Logs"),
 		tabStyle.Render("Metrics"),
