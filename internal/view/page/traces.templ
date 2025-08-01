@@ -1,11 +1,12 @@
+
 package page
 
 import "github.com/jwafle/otail/internal/view/layout"
 
-templ Metrics() {
+templ Traces() {
 	@layout.Base() {
-		<div hx-ext="sse" sse-connect="/metrics/sse">
-			<div sse-swap="metrics" hx-swap="afterbegin">
+		<div hx-ext="sse" sse-connect="/traces/sse">
+			<div sse-swap="traces" hx-swap="afterbegin">
 				<!-- New entries appear here -->
 			</div>
 		</div>

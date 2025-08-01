@@ -45,15 +45,15 @@ func main() {
 	//--------------------------
 	//panic recover
 	esrv.Use(middleware.Recover())
-	//body limit
+	// body limit
 	esrv.Use(middleware.BodyLimit("35K"))
-	//secure header
+	// secure header
 	esrv.Use(middleware.Secure())
-	//timeout
-	esrv.Use(middleware.TimeoutWithConfig(middleware.TimeoutConfig{
+	// timeout
+	timeout := middleware.TimeoutWithConfig(middleware.TimeoutConfig{
 		Timeout: 5 * time.Second,
-	}))
-	//logger
+	})
+	// logger
 	esrv.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
 		Format: `{"time":"${time_rfc3339_nano}","remote_ip":"${remote_ip}",` +
 			`"host":"${host}","method":"${method}","uri":"${uri}",` +
@@ -62,11 +62,11 @@ func main() {
 		CustomTimeFormat: "2006-01-02 15:04:05.00000",
 	}))
 
-	//routes
-	esrv.GET("/", app.home)
-	esrv.GET("/metrics", app.metrics)
-	esrv.GET("/logs", app.logs)
-	esrv.GET("/traces", app.traces)
+	// routes
+	esrv.GET("/", app.home, timeout)
+	esrv.GET("/metrics", app.metrics, timeout)
+	esrv.GET("/logs", app.logs, timeout)
+	esrv.GET("/traces", app.traces, timeout)
 	esrv.GET("/metrics/sse", app.streamMetrics)
 	esrv.GET("/logs/sse", app.streamLogs)
 	esrv.GET("/traces/sse", app.streamTraces)
